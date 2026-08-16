@@ -18,16 +18,15 @@ def main():
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     
-    # Calculate recommended workers: min(CPU_CORES * 2 + 1, 8) or from settings
-    cpu_cores = multiprocessing.cpu_count()
-    recommended_workers = min(max(cpu_cores, 2), 8)
-    workers = settings.WEB_WORKERS or recommended_workers
+    # Single async worker — file-based local Qdrant can only be opened by ONE process.
+    # Async event loop in a single worker still handles 20+ concurrent I/O-bound requests.
+    workers = 1
 
     print("=" * 60)
     print(f"🚀 Starting Welyft Scalable RAG Server")
     print(f"🌐 Host: http://{host}:{port}")
-    print(f"⚡ Workers: {workers} multi-process workers")
-    print(f"🛡️ Concurrency Limit per Worker: {settings.MAX_CONCURRENT_REQUESTS} requests")
+    print(f"⚡ Workers: {workers} async worker (handles {settings.MAX_CONCURRENT_REQUESTS} concurrent requests)")
+    print(f"🛡️ Concurrency Limit: {settings.MAX_CONCURRENT_REQUESTS} requests")
     print(f"💾 Caching: {'ENABLED' if settings.ENABLE_CACHE else 'DISABLED'}")
     print("=" * 60)
 

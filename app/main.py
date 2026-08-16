@@ -139,26 +139,39 @@ async def query(request: QueryRequest):
             
             config = {"configurable": {"thread_id": thread_id}}
 
-            # Gate 1: NeMo Guardrails (Run off main async loop to avoid blocking)
-            rail_fired, rail_response = await anyio.to_thread.run_sync(guard, q)
-            
+            # ── Run Guardrails + RAG Pipeline CONCURRENTLY ────────────────
+            # Guardrails was taking ~6s sequentially. Running both in parallel
+            # cuts total latency by ~6s. If guardrails fires, RAG result is discarded.
+
+            async def run_guardrails():
+                return await anyio.to_thread.run_sync(guard, q)
+
+            async def run_rag_pipeline():
+                def _invoke():
+                    return rag_agent.invoke(initial_state, config=config)
+                return await anyio.to_thread.run_sync(_invoke)
+
+            guard_task = asyncio.create_task(run_guardrails())
+            rag_task = asyncio.create_task(run_rag_pipeline())
+
+            # Wait for guardrails first (usually finishes in ~6s)
+            rail_fired, rail_response = await guard_task
+
             if rail_fired:
+                # Cancel the RAG pipeline — not needed
+                rag_task.cancel()
                 stats["blocked_requests"] += 1
                 logfire.info(f"🛡️ Request blocked by guardrails | thread={thread_id}")
-                blocked_res = {
+                return {
                     "question": q,
                     "answer": rail_response,
                     "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
                     "status": "Blocked by guardrails.",
                     "sources": []
                 }
-                return blocked_res
 
-            # Gate 2: LangGraph RAG pipeline (Run off main async loop)
-            def run_agent_workflow():
-                return rag_agent.invoke(initial_state, config=config)
-
-            final_output = await anyio.to_thread.run_sync(run_agent_workflow)
+            # Guardrails passed — wait for RAG pipeline to finish
+            final_output = await rag_task
             
             result = {
                 "question": q,
