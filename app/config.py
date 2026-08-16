@@ -20,7 +20,8 @@ class Settings:
     # --- LLM GATEWAY (PORTKEY) ---
     PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
     PORTKEY_CONFIG_ID = os.getenv("PORTKEY_CONFIG_ID")  # Optional: Use a specific Portkey config ID if set
-    DEEPSEEK_SLUG = "rag3"  # Portkey virtual key slug for DeepSeek
+    PORTKEY_SLUG = os.getenv("PORTKEY_SLUG", "rag4")     # Portkey virtual key slug (e.g. rag4 for Groq/DeepSeek)
+    DEEPSEEK_SLUG = os.getenv("PORTKEY_SLUG", "rag4")
 
     
     # --- OBSERVABILITY ---
