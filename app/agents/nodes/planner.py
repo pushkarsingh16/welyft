@@ -16,8 +16,9 @@ def planner_node(state: AgentState):
     to avoid wasting LLM calls on non-Welyft queries.
     """
     user_message = state["messages"][-1]["content"].strip() if state["messages"] else ""
+    lowered = user_message.lower()
 
-    # Fast-Path 1: Math Questions -> Predefined OFF_TOPIC
+    # Fast-Path 1: Math Questions -> Predefined OFF_TOPIC (0ms)
     if MATH_PATTERN.match(user_message):
         logfire.info(f"⚡ Fast-Path Triggered: Math query detected ('{user_message}')")
         return {
@@ -26,7 +27,7 @@ def planner_node(state: AgentState):
             "plan": ["Intent: Math/Off-Topic", "Retrieval: Skipped", "LLM: Skipped (Predefined Response)"]
         }
 
-    # Fast-Path 2: Simple Greetings -> Predefined GREETING
+    # Fast-Path 2: Simple Greetings -> Predefined GREETING (0ms)
     if GREETING_PATTERN.match(user_message):
         logfire.info(f"⚡ Fast-Path Triggered: Simple greeting detected ('{user_message}')")
         return {
@@ -35,8 +36,7 @@ def planner_node(state: AgentState):
             "plan": ["Intent: Greeting", "Retrieval: Skipped", "LLM: Skipped (Predefined Response)"]
         }
 
-    # Fast-Path 3: Keyword Off-Topic check
-    lowered = user_message.lower()
+    # Fast-Path 3: Keyword Off-Topic check (0ms)
     if any(kw in lowered for kw in OFF_TOPIC_KEYWORDS):
         logfire.info(f"⚡ Fast-Path Triggered: Off-topic keyword detected ('{user_message}')")
         return {
@@ -45,33 +45,71 @@ def planner_node(state: AgentState):
             "plan": ["Intent: Off-Topic", "Retrieval: Skipped", "LLM: Skipped (Predefined Response)"]
         }
 
-    # LLM Planner for context-dependent decisions
+    # ⚡ Fast-Path 4: Domain Logistics Keyword Mapping (0ms, 0 LLM Tokens)
+    if "b2b" in lowered:
+        logfire.info(f"⚡ Fast-Path Triggered: B2B keyword match ('{user_message}')")
+        return {
+            "current_query": "Welyft B2B enterprise logistics services models",
+            "status": "Searching B2B logistics model...",
+            "plan": ["Intent: B2B Fast-Path ⚡"]
+        }
+    if "b2c" in lowered:
+        logfire.info(f"⚡ Fast-Path Triggered: B2C keyword match ('{user_message}')")
+        return {
+            "current_query": "Welyft B2C parcel delivery services",
+            "status": "Searching B2C logistics model...",
+            "plan": ["Intent: B2C Fast-Path ⚡"]
+        }
+    if "c2c" in lowered:
+        logfire.info(f"⚡ Fast-Path Triggered: C2C keyword match ('{user_message}')")
+        return {
+            "current_query": "Welyft C2C customer parcel delivery services",
+            "status": "Searching C2C logistics model...",
+            "plan": ["Intent: C2C Fast-Path ⚡"]
+        }
+    if "wemove" in lowered:
+        logfire.info(f"⚡ Fast-Path Triggered: WeMove keyword match ('{user_message}')")
+        return {
+            "current_query": "WeMove parcel delivery EV van rental",
+            "status": "Searching WeMove services...",
+            "plan": ["Intent: WeMove Fast-Path ⚡"]
+        }
+    if any(kw in lowered for kw in ["co2", "green", "ev", "electric", "emission"]):
+        logfire.info(f"⚡ Fast-Path Triggered: Sustainability keyword match ('{user_message}')")
+        return {
+            "current_query": "Welyft EV electric fleet sustainability CO2 savings",
+            "status": "Searching Sustainability model...",
+            "plan": ["Intent: Sustainability Fast-Path ⚡"]
+        }
+
+    # LLM Planner fallback for complex/unseen questions (strictly short output)
     history = ""
     for msg in state["messages"][:-1]:
         role = "User" if msg["role"] == "user" else "Assistant"
         history += f"{role}: {msg['content']}\n"
 
     prompt = f"""
-    You are an intelligent Assistant Planner for Welyft, a logistics and delivery platform.
-    Analyze the conversation history and the latest user message.
+    You are an Assistant Planner for Welyft logistics platform.
+    Return ONLY a 3 to 5 word search query for retrieving technical documentation.
+    Do NOT write sentences, preambles, explanations, or quotes.
 
-    CONVERSATION HISTORY:
-    {history}
+    If off-topic (math, jokes), output ONLY 'OFF_TOPIC'.
+    If asking about previous message, output ONLY 'CONVERSATIONAL'.
 
-    LATEST MESSAGE:
-    "{user_message}"
-
-    Task:
-    1. If the latest message is an off-topic question unrelated to logistics/Welyft (e.g., math, trivia, general knowledge, jokes), output 'OFF_TOPIC'.
-    2. If it is a basic conversational question relying ONLY on memory (e.g., "what did I just ask?"), output 'CONVERSATIONAL'.
-    3. If it is ANY question about Welyft's platform, features, pricing, fleet management, dispatch, order tracking, B2B/B2C/C2C logistics models, driver management, or delivery operations — output a refined search query.
-
-    Output ONLY 'OFF_TOPIC', 'CONVERSATIONAL', or the search query.
-    """
+    USER MESSAGE: "{user_message}"
+    SEARCH QUERY:"""
 
     with logfire.span("🧠 Planner Decision"):
-        decision = llm.invoke(prompt).content.strip()
-        logfire.info(f"Intent identified: {decision}")
+        try:
+            # Bind max_tokens=30 so response takes <0.5s
+            fast_llm = llm.bind(max_tokens=30)
+            decision = fast_llm.invoke(prompt).content.strip()
+            # Clean any leftover newlines/quotes
+            decision = re.sub(r'[\r\n"]+', ' ', decision).strip()
+            logfire.info(f"Intent identified: {decision}")
+        except Exception as e:
+            logfire.warning(f"Planner LLM failed: {e} — using raw query")
+            decision = user_message
 
     if "OFF_TOPIC" in decision.upper():
         return {
@@ -80,7 +118,7 @@ def planner_node(state: AgentState):
             "plan": ["Intent: Off-Topic", "Retrieval: Skipped", "LLM: Skipped (Predefined Response)"]
         }
 
-    if decision.upper() == "CONVERSATIONAL":
+    if "CONVERSATIONAL" in decision.upper():
         return {
             "current_query": "CONVERSATIONAL",
             "status": "Handling conversationally (using memory)...",
@@ -89,6 +127,7 @@ def planner_node(state: AgentState):
 
     return {
         "current_query": decision,
-        "status": f"Technical research needed. Searching for: {decision}",
+        "status": f"Searching for: {decision}",
         "plan": ["Intent: Technical", f"Search Term: {decision}"]
     }
+

@@ -51,6 +51,17 @@ async def startup_event():
     global concurrency_semaphore
     initialize_rails()
     concurrency_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_REQUESTS)
+    
+    # Pre-warm local Qdrant and FlashRank ONNX model to eliminate cold-start delays
+    try:
+        from app.services.retrieval.qdrant_service import _get_local_client
+        from app.services.retrieval.ranking_service import _get_ranker
+        await anyio.to_thread.run_sync(_get_local_client)
+        await anyio.to_thread.run_sync(_get_ranker)
+        logfire.info("🔥 Local Qdrant DB and FlashRank ONNX model pre-warmed.")
+    except Exception as e:
+        logfire.warning(f"Startup pre-warm notice: {e}")
+
     logfire.info(f"⚡ Server initialized with max concurrency limit of {settings.MAX_CONCURRENT_REQUESTS} parallel requests.")
 
 class QueryRequest(BaseModel):
