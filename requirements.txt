@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+langgraph
+langchain
+langchain-groq
+langchain-openai
+langchain-google-genai
+qdrant-client
+portkey-ai
+pydantic
+pydantic-settings
+logfire
+nemoguardrails
+streamlit
+python-dotenv
