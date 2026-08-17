@@ -15,7 +15,7 @@ GATEWAY_CONFIG = {
         "on_status_codes": [429, 503]
     },
     "targets": [
-        {"override_params": {"model": f"@{settings.PORTKEY_SLUG}/llama-3.3-70b-versatile"}},
+        {"override_params": {"model": f"@{settings.PORTKEY_SLUG}/deepseek-chat"}},
     ]
 }
 
@@ -27,12 +27,12 @@ portkey_client = Portkey(
 
 def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
     """
-    Returns a Portkey-backed ChatOpenAI using the rag4 virtual key slug.
+    Returns a Portkey-backed ChatOpenAI using the DeepSeek rag5 virtual key slug.
     """
     return ChatOpenAI(
         api_key=settings.PORTKEY_API_KEY,
         base_url=PORTKEY_GATEWAY_URL,
-        model=f"@{settings.PORTKEY_SLUG}/llama-3.3-70b-versatile",
+        model=f"@{settings.PORTKEY_SLUG}/deepseek-chat",
         temperature=0,
         default_headers=createHeaders(
             api_key=settings.PORTKEY_API_KEY,
