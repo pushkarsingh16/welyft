@@ -37,3 +37,5 @@ venv/
 *.njsproj
 *.sln
 *.sw?
+*.db
+*.code-workspace
