@@ -17,9 +17,11 @@ from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
 from app.config import settings
 from app.services.cache_service import query_cache
+from app.services.db_service import db_service
+from app.services.topic_processor import analyze_chat_topics
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -52,6 +54,12 @@ async def startup_event():
     initialize_rails()
     concurrency_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_REQUESTS)
     
+    # Initialize PostgreSQL / local DB schema
+    try:
+        db_service.init_db()
+    except Exception as db_err:
+        logfire.warning(f"Database startup init warning: {db_err}")
+
     # Pre-warm local Qdrant and FlashRank ONNX model to eliminate cold-start delays
     try:
         from app.services.retrieval.qdrant_service import _get_local_client
@@ -67,6 +75,12 @@ async def startup_event():
 class QueryRequest(BaseModel):
     q: str
     thread_id: Optional[str] = "default_user"
+
+class EndChatRequest(BaseModel):
+    thread_id: str
+    email: str
+    messages: List[Dict[str, Any]] = []
+
     
     
 @app.get("/")
@@ -196,6 +210,14 @@ async def query(request: QueryRequest):
             if settings.ENABLE_CACHE and result.get("answer"):
                 await query_cache.set(cache_key, result)
 
+            # Record chat messages in PostgreSQL DB
+            try:
+                db_service.save_message(thread_id, "user", q)
+                if result.get("answer"):
+                    db_service.save_message(thread_id, "bot", result["answer"])
+            except Exception as save_err:
+                logfire.warning(f"Error logging message to DB: {save_err}")
+
             return result
 
         except Exception as e:
@@ -210,3 +232,43 @@ async def query(request: QueryRequest):
             }
         finally:
             stats["active_requests"] -= 1
+
+
+@app.post("/end-chat")
+async def end_chat(request: EndChatRequest):
+    """
+    Handles session completion: receives Email ID and chat history,
+    processes the topics searched by the user to identify tailored Welyft service pitches,
+    and stores all lead details in the PostgreSQL database.
+    """
+    email = request.email.strip()
+    thread_id = request.thread_id.strip()
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    # Process topics and pitched services based on user's conversation
+    topics, pitched_services, summary = analyze_chat_topics(request.messages)
+
+    # Save to PostgreSQL database
+    success = db_service.save_ended_session(
+        session_id=thread_id,
+        email=email,
+        messages=request.messages,
+        interested_topics=topics,
+        pitched_services=pitched_services,
+        lead_summary=summary
+    )
+
+    if not success:
+        logfire.warning(f"Failed to persist lead session into DB for email {email}")
+
+    return {
+        "status": "success",
+        "message": "Thank you! Your information and preferences have been saved.",
+        "email": email,
+        "interested_topics": topics,
+        "pitched_services": pitched_services,
+        "lead_summary": summary
+    }
+

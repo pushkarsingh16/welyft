@@ -95,6 +95,10 @@ def generate_node(state: AgentState):
         """
 
     with logfire.span("✍️ LLM Synthesis"):
+        content = None
+        status = "Response generated."
+        plan_update = state["plan"]
+
         try:
             response = portkey_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -103,24 +107,39 @@ def generate_node(state: AgentState):
             )
             content = response.choices[0].message.content
             cache_status = extract_cache_status(response)
-            is_cache_hit = cache_status == "HIT"
-
-            if is_cache_hit:
+            if cache_status == "HIT":
                 logfire.info("⚡ Gateway Cache Hit — response served from Portkey cache.")
                 plan_update = state["plan"] + ["Cache: Hit ⚡"]
                 status = "Cache hit — instant response."
             else:
-                logfire.info("✅ Response synthesised via LLM.")
-                plan_update = state["plan"]
-                status = "Response generated."
-
-            return {
-                "final_answer": content,
-                "status": status,
-                "plan": plan_update,
-                "messages": [{"role": "assistant", "content": content}]
-            }
-
+                logfire.info("✅ Response synthesised via Portkey LLM.")
         except Exception as e:
-            logfire.error(f"LLM Generation failed: {e}")
-            raise e
+            logfire.warning(f"Portkey LLM call notice ({e}). Attempting direct Groq fallback...")
+            try:
+                import os
+                from groq import Groq
+                groq_key = os.getenv("GROQ_API_KEY") or os.getenv("GROQ_FALLBACK_API_KEY")
+                if groq_key:
+                    groq_client = Groq(api_key=groq_key)
+                    res = groq_client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model="groq/compound-mini",
+                        temperature=0.1,
+                        max_tokens=250
+                    )
+                    content = res.choices[0].message.content
+                    logfire.info("✅ Response synthesised via Groq fallback.")
+                    plan_update = state["plan"] + ["Groq Fallback ⚡"]
+                else:
+                    raise e
+            except Exception as fallback_err:
+                logfire.error(f"LLM Generation failed: {fallback_err}")
+                raise fallback_err
+
+        return {
+            "final_answer": content,
+            "status": status,
+            "plan": plan_update,
+            "messages": [{"role": "assistant", "content": content}]
+        }
+

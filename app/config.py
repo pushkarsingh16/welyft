@@ -36,6 +36,18 @@ class Settings:
     CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
     WEB_WORKERS = int(os.getenv("WEB_WORKERS", "4"))
 
+    # --- POSTGRESQL DATABASE ---
+    POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+    POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+    POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_DB = os.getenv("POSTGRES_DB", "welyft_db")
+    POSTGRES_URL = os.getenv(
+        "POSTGRES_URL",
+        f"postgresql://{os.getenv('POSTGRES_USER', 'postgres')}:{os.getenv('POSTGRES_PASSWORD', 'postgres')}@{os.getenv('POSTGRES_HOST', 'localhost')}:{os.getenv('POSTGRES_PORT', '5432')}/{os.getenv('POSTGRES_DB', 'welyft_db')}"
+    )
+
+
 
 # Apply LangChain environment variables for automatic tracing
 os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGSMITH_TRACING", "true")

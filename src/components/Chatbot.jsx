@@ -137,23 +137,24 @@ const MessageBubble = ({ msg, onTypingComplete }) => {
 
   return (
     <div className={`flex flex-col ${msg.type === 'user' ? 'items-end' : 'items-start'}`}>
-      <div className={`p-3 rounded-2xl max-w-[85%] text-[15px] leading-relaxed shadow-sm ${
+      <div className={`p-3 rounded-2xl max-w-[85%] text-[15px] leading-relaxed shadow-sm break-words overflow-hidden ${
         msg.type === 'user' 
-          ? 'bg-[#0A1F44] text-white rounded-tr-sm' 
-          : 'bg-white text-gray-800 rounded-tl-sm border border-gray-100'
+          ? 'bg-[#0A1F44] text-white rounded-tr-sm self-end' 
+          : 'bg-white text-gray-800 rounded-tl-sm border border-gray-100 self-start'
       }`}>
         {msg.type === 'bot' ? (
-          <div className="prose prose-sm max-w-none prose-p:leading-snug prose-a:text-[#F8D12F] prose-a:font-semibold prose-a:underline">
+          <div className="prose prose-sm max-w-none prose-p:leading-snug prose-a:text-[#F8D12F] prose-a:font-semibold prose-a:underline break-words">
             <ReactMarkdown>
               {displayedText + (msg.isLlmStream ? ' ▋' : '')}
             </ReactMarkdown>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap text-white">
+          <div className="whitespace-pre-wrap text-white break-words">
             {displayedText}
           </div>
         )}
       </div>
+
 
       {msg.options && msg.showOptions && (
         <div className="flex flex-col mt-3 space-y-2 w-full max-w-[85%] animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -180,6 +181,11 @@ const Chatbot = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [threadId] = useState(() => "session_" + Math.random().toString(36).substring(2, 10));
   
+  // End Chat & Email collection state
+  const [awaitingEmail, setAwaitingEmail] = useState(false);
+  const [chatEnded, setChatEnded] = useState(false);
+  const [isSubmittingEmail, setIsSubmittingEmail] = useState(false);
+
   const messagesEndRef = useRef(null);
 
   // Initialize chat
@@ -206,6 +212,7 @@ const Chatbot = () => {
   }, [messages, isTyping]);
 
   const handleOptionClick = (option) => {
+    if (chatEnded) return;
     const userMsg = { type: 'user', text: option.text, isSimulatedStream: false };
     
     // Other option selected -> enable text input box
@@ -220,27 +227,12 @@ const Chatbot = () => {
       return;
     }
 
-    // Go Back option selected -> return to original 4 topic menu + Enable text input
-    if (option.id === 'go_back') {
-      setShowInput(true);
-      setMessages(prev => [...prev, userMsg, { 
-        type: 'bot', 
-        text: "What else would you like to know?",
-        isSimulatedStream: true,
-        showOptions: false,
-        options: topLevelOptions,
-        onOptionClick: handleOptionClick
-      }]);
-      return;
-    }
-
-    // Top-level topic selected (q1, q2, q3, q4) -> show answer + subQuestions + Go Back + Enable Typing
+    // Top-level topic selected (q1, q2, q3, q4) -> show answer + subQuestions + Enable Typing (No Go Back option)
     if (faqData[option.id]) {
       setShowInput(true);
       const data = faqData[option.id];
       const nextOptions = [
-        ...data.subQuestions.map(sq => ({ text: sq.text, id: sq.id, parentId: option.id })),
-        { text: "Go Back", id: "go_back" }
+        ...data.subQuestions.map(sq => ({ text: sq.text, id: sq.id, parentId: option.id }))
       ];
       
       setMessages(prev => [...prev, userMsg, { 
@@ -248,13 +240,13 @@ const Chatbot = () => {
         text: data.answer,
         isSimulatedStream: true,
         showOptions: false,
-        options: nextOptions,
+        options: nextOptions.length > 0 ? nextOptions : null,
         onOptionClick: handleOptionClick
       }]);
       return;
     }
 
-    // Sub-question selected -> show detailed answer + Go Back option + Enable Typing
+    // Sub-question selected -> show detailed answer + Enable Typing (No Go Back option)
     if (option.parentId && faqData[option.parentId]) {
       setShowInput(true);
       const parentData = faqData[option.parentId];
@@ -265,16 +257,108 @@ const Chatbot = () => {
           text: subQ.answer,
           isSimulatedStream: true,
           showOptions: false,
-          options: [{ text: "Go Back", id: "go_back" }],
           onOptionClick: handleOptionClick
         }]);
       }
     }
   };
 
+  const triggerEndChat = () => {
+    if (chatEnded || awaitingEmail) return;
+    setAwaitingEmail(true);
+    setShowInput(true);
+    setMessages(prev => [
+      ...prev,
+      {
+        type: 'bot',
+        text: "Thank you for chatting with Welyft! To complete your session and receive tailored service proposals from our enterprise sales team, please enter your email address below:",
+        isSimulatedStream: true,
+        showOptions: false
+      }
+    ]);
+  };
+
+  const handleEmailSubmit = async (emailText) => {
+    const email = emailText.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    
+    if (!emailRegex.test(email)) {
+      setMessages(prev => [
+        ...prev,
+        { type: 'user', text: email, isSimulatedStream: false },
+        {
+          type: 'bot',
+          text: "Please enter a valid email address (e.g. name@company.com) so our team can reach out to you.",
+          isSimulatedStream: true,
+          showOptions: false
+        }
+      ]);
+      setInputText("");
+      return;
+    }
+
+    setMessages(prev => [...prev, { type: 'user', text: email, isSimulatedStream: false }]);
+    setInputText("");
+    setIsSubmittingEmail(true);
+
+    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+
+    try {
+      const currentMessages = [...messages, { type: 'user', text: email }];
+      const response = await fetch(`${BACKEND_URL}/end-chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          thread_id: threadId,
+          email: email,
+          messages: currentMessages
+        })
+      });
+
+      const data = await response.json();
+      setIsSubmittingEmail(false);
+      setAwaitingEmail(false);
+      setChatEnded(true);
+
+      const topicsStr = data.interested_topics && data.interested_topics.length > 0 
+        ? data.interested_topics.join(", ") 
+        : "Welyft Logistics & Fleet Services";
+
+      setMessages(prev => [
+        ...prev,
+        {
+          type: 'bot',
+          text: `Thank you! Your information has been saved into our local database. Our enterprise logistics team will review your requested topics (**${topicsStr}**) and reach out to you at **${email}** with custom service offerings.`,
+          isSimulatedStream: true,
+          showOptions: false
+        }
+      ]);
+    } catch (err) {
+      console.error("Error submitting lead email:", err);
+      setIsSubmittingEmail(false);
+      setAwaitingEmail(false);
+      setChatEnded(true);
+      setMessages(prev => [
+        ...prev,
+        {
+          type: 'bot',
+          text: `Thank you! We've registered your email (**${email}**). Our team will get in touch with you shortly.`,
+          isSimulatedStream: true,
+          showOptions: false
+        }
+      ]);
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || chatEnded || isSubmittingEmail) return;
+
+    if (awaitingEmail) {
+      return handleEmailSubmit(inputText);
+    }
 
     const userText = inputText.trim();
     setMessages(prev => [...prev, { type: 'user', text: userText, isSimulatedStream: false }]);
@@ -311,7 +395,6 @@ const Chatbot = () => {
         text: data.answer || "Sorry, I didn't get a response.",
         isSimulatedStream: true,
         showOptions: false,
-        options: [{ text: "Go Back", id: "go_back" }],
         onOptionClick: handleOptionClick
       }]);
 
@@ -327,7 +410,6 @@ const Chatbot = () => {
           : "Sorry, I'm having trouble connecting to the backend right now. Please ensure the server is running.",
         isSimulatedStream: true,
         showOptions: false,
-        options: [{ text: "Go Back", id: "go_back" }],
         onOptionClick: handleOptionClick
       }]);
     }
@@ -340,6 +422,7 @@ const Chatbot = () => {
       return newMsgs;
     });
   };
+
 
   return (
     <>
@@ -359,9 +442,20 @@ const Chatbot = () => {
               <MessageCircle size={20} className="text-[#F8D12F]" />
               <h3 className="font-semibold text-lg">Welyft Support</h3>
             </div>
-            <button onClick={() => setIsOpen(false)} className="hover:text-[#F8D12F] transition-colors p-1 rounded-full hover:bg-white/10">
-              <X size={20} />
-            </button>
+            <div className="flex items-center space-x-2">
+              {!chatEnded && (
+                <button 
+                  onClick={triggerEndChat}
+                  className="text-xs bg-[#F8D12F] text-[#0A1F44] font-semibold px-2.5 py-1 rounded-lg hover:bg-yellow-400 transition-colors shadow-sm cursor-pointer"
+                  title="End chat session and receive custom proposals"
+                >
+                  End Chat
+                </button>
+              )}
+              <button onClick={() => setIsOpen(false)} className="hover:text-[#F8D12F] transition-colors p-1 rounded-full hover:bg-white/10">
+                <X size={20} />
+              </button>
+            </div>
           </div>
           
           {/* Body */}
@@ -388,23 +482,42 @@ const Chatbot = () => {
           
           {/* Input Area */}
           <div className={`p-3 bg-white border-t border-gray-200 transition-all duration-300 ease-in-out ${showInput ? 'block' : 'hidden'}`}>
-            <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-              <input 
-                type="text" 
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder="Type your message..." 
-                className="flex-1 bg-[#0A1F44] text-white placeholder-gray-400 rounded-full px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#F8D12F] border-transparent"
-              />
-              <button 
-                type="submit" 
-                disabled={!inputText.trim()}
-                className="bg-[#0A1F44] text-white p-2.5 rounded-full hover:bg-[#0A1F44]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                <Send size={18} />
-              </button>
-            </form>
+            {chatEnded ? (
+              <div className="text-center py-1 text-xs text-gray-500 font-medium">
+                Chat session ended. Thank you for contacting Welyft!
+              </div>
+            ) : (
+              <form onSubmit={handleSendMessage} className="flex items-end space-x-2">
+                <textarea 
+                  rows={1}
+                  value={inputText}
+                  onChange={(e) => {
+                    setInputText(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = `${Math.min(e.target.scrollHeight, 110)}px`;
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage(e);
+                    }
+                  }}
+                  placeholder={awaitingEmail ? "Enter your email address..." : "Type your message..."} 
+                  disabled={isSubmittingEmail}
+                  className="flex-1 bg-[#0A1F44] text-white placeholder-gray-400 rounded-2xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#F8D12F] border-transparent disabled:opacity-60 resize-none min-h-[42px] max-h-28 overflow-y-auto leading-relaxed"
+                />
+                <button 
+                  type="submit" 
+                  disabled={!inputText.trim() || isSubmittingEmail}
+                  className="bg-[#0A1F44] text-white p-2.5 rounded-full hover:bg-[#0A1F44]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors mb-0.5 shrink-0"
+                >
+                  <Send size={18} />
+                </button>
+              </form>
+
+            )}
           </div>
+
           
         </div>
       )}
