@@ -65,7 +65,7 @@ def generate_node(state: AgentState):
         """
     else:
         logfire.info("Generating technical RAG response.")
-        max_context_chars = 25000
+        max_context_chars = 10000
         full_context = ""
 
         for doc in state["documents"]:
@@ -99,6 +99,31 @@ def generate_node(state: AgentState):
         status = "Response generated."
         plan_update = state["plan"]
 
+        # 1. Primary: Direct DeepSeek API Call
+        from app.config import settings
+        if settings.DEEPSEEK_API_KEY:
+            try:
+                from openai import OpenAI
+                ds_client = OpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+                res = ds_client.chat.completions.create(
+                    model=settings.DEEPSEEK_MODEL or "deepseek-chat",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=300
+                )
+                content = res.choices[0].message.content
+                logfire.info("✅ Response synthesised via DeepSeek API.")
+                plan_update = state["plan"] + ["DeepSeek LLM ⚡"]
+                return {
+                    "final_answer": content,
+                    "status": status,
+                    "plan": plan_update,
+                    "messages": [{"role": "assistant", "content": content}]
+                }
+            except Exception as ds_err:
+                logfire.warning(f"DeepSeek direct API call notice ({ds_err}). Falling back to Portkey / Groq...")
+
+        # 2. Secondary Fallback: Portkey Gateway
         try:
             response = portkey_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -123,7 +148,7 @@ def generate_node(state: AgentState):
                     groq_client = Groq(api_key=groq_key)
                     res = groq_client.chat.completions.create(
                         messages=[{"role": "user", "content": prompt}],
-                        model="groq/compound-mini",
+                        model="llama-3.3-70b-versatile",
                         temperature=0.1,
                         max_tokens=250
                     )

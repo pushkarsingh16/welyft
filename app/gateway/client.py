@@ -27,8 +27,15 @@ portkey_client = Portkey(
 
 def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
     """
-    Returns a Portkey-backed ChatOpenAI using the DeepSeek rag5 virtual key slug.
+    Returns a ChatOpenAI configured for DeepSeek directly (or Portkey fallback).
     """
+    if settings.DEEPSEEK_API_KEY:
+        return ChatOpenAI(
+            api_key=settings.DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com",
+            model=settings.DEEPSEEK_MODEL or "deepseek-chat",
+            temperature=0
+        )
     return ChatOpenAI(
         api_key=settings.PORTKEY_API_KEY,
         base_url=PORTKEY_GATEWAY_URL,
