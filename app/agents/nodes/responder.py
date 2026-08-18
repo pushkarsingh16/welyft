@@ -65,7 +65,7 @@ def generate_node(state: AgentState):
         """
     else:
         logfire.info("Generating technical RAG response.")
-        max_context_chars = 10000
+        max_context_chars = 8000
         full_context = ""
 
         for doc in state["documents"]:
@@ -99,29 +99,30 @@ def generate_node(state: AgentState):
         status = "Response generated."
         plan_update = state["plan"]
 
-        # 1. Primary: Direct DeepSeek API Call
-        from app.config import settings
-        if settings.DEEPSEEK_API_KEY:
+        # 1. Primary: Direct Groq API Call with groq/compound-mini
+        import os
+        from groq import Groq
+        groq_key = os.getenv("GROQ_API_KEY") or os.getenv("GROQ_FALLBACK_API_KEY")
+        if groq_key:
             try:
-                from openai import OpenAI
-                ds_client = OpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-                res = ds_client.chat.completions.create(
-                    model=settings.DEEPSEEK_MODEL or "deepseek-chat",
+                groq_client = Groq(api_key=groq_key)
+                res = groq_client.chat.completions.create(
                     messages=[{"role": "user", "content": prompt}],
+                    model="groq/compound-mini",
                     temperature=0.1,
-                    max_tokens=300
+                    max_tokens=250
                 )
                 content = res.choices[0].message.content
-                logfire.info("✅ Response synthesised via DeepSeek API.")
-                plan_update = state["plan"] + ["DeepSeek LLM ⚡"]
+                logfire.info("✅ Response synthesised via Groq (groq/compound-mini).")
+                plan_update = state["plan"] + ["Groq LLM ⚡"]
                 return {
                     "final_answer": content,
                     "status": status,
                     "plan": plan_update,
                     "messages": [{"role": "assistant", "content": content}]
                 }
-            except Exception as ds_err:
-                logfire.warning(f"DeepSeek direct API call notice ({ds_err}). Falling back to Portkey / Groq...")
+            except Exception as groq_err:
+                logfire.warning(f"Groq primary call notice ({groq_err}). Trying Portkey fallback...")
 
         # 2. Secondary Fallback: Portkey Gateway
         try:
@@ -139,27 +140,8 @@ def generate_node(state: AgentState):
             else:
                 logfire.info("✅ Response synthesised via Portkey LLM.")
         except Exception as e:
-            logfire.warning(f"Portkey LLM call notice ({e}). Attempting direct Groq fallback...")
-            try:
-                import os
-                from groq import Groq
-                groq_key = os.getenv("GROQ_API_KEY") or os.getenv("GROQ_FALLBACK_API_KEY")
-                if groq_key:
-                    groq_client = Groq(api_key=groq_key)
-                    res = groq_client.chat.completions.create(
-                        messages=[{"role": "user", "content": prompt}],
-                        model="llama-3.3-70b-versatile",
-                        temperature=0.1,
-                        max_tokens=250
-                    )
-                    content = res.choices[0].message.content
-                    logfire.info("✅ Response synthesised via Groq fallback.")
-                    plan_update = state["plan"] + ["Groq Fallback ⚡"]
-                else:
-                    raise e
-            except Exception as fallback_err:
-                logfire.error(f"LLM Generation failed: {fallback_err}")
-                raise fallback_err
+            logfire.error(f"LLM Generation failed: {e}")
+            raise e
 
         return {
             "final_answer": content,

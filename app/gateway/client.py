@@ -25,15 +25,18 @@ portkey_client = Portkey(
 )
 
 
-def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
+import os
+from langchain_groq import ChatGroq
+
+def get_langchain_llm(feature: str = "rag"):
     """
-    Returns a ChatOpenAI configured for DeepSeek directly (or Portkey fallback).
+    Returns ChatGroq using groq/compound-mini model.
     """
-    if settings.DEEPSEEK_API_KEY:
-        return ChatOpenAI(
-            api_key=settings.DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com",
-            model=settings.DEEPSEEK_MODEL or "deepseek-chat",
+    groq_key = os.getenv("GROQ_API_KEY") or os.getenv("GROQ_FALLBACK_API_KEY")
+    if groq_key:
+        return ChatGroq(
+            groq_api_key=groq_key,
+            model_name="groq/compound-mini",
             temperature=0
         )
     return ChatOpenAI(
